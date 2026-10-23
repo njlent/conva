@@ -1,4 +1,4 @@
-# conva
+# conva cli
 
 An image and image sequence converter with ffmpeg-style options. It is built on OpenImageIO and
 OpenColorIO, and the ACES configs ship with OCIO, so it needs no config files.
