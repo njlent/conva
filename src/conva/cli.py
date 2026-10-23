@@ -30,6 +30,7 @@ examples:
   conva -i IMG_0001.CR3 -ocs srgb_tx -s 1920x-1 -q 90 IMG_0001.webp
   conva -i in.exr                                              (show file info)
   conva -colorspaces sony | conva -displays | conva -formats | conva -configs
+  conva -install_skill                                         (agent skill for Claude Code + Codex)
 
 sequences: patterns ####, %04d, @@@@ and $F4 are supported for input and output.
 config:    default is $OCIO if set, else the built-in ACES studio config (ACES 2.1).
@@ -94,6 +95,8 @@ def build_parser() -> argparse.ArgumentParser:
     g.add_argument("-looks", action="store_true", help="list looks")
     g.add_argument("-formats", action="store_true", help="list supported file formats")
     g.add_argument("-configs", action="store_true", help="list built-in OCIO configs")
+    g.add_argument("-install_skill", nargs="?", const="all", choices=["claude", "codex", "all"],
+                   help="install the conva agent skill for Claude Code and/or Codex (default: all)")
     return p
 
 
@@ -144,6 +147,24 @@ def list_configs() -> None:
     for name in reg:
         print(f"  {name}")
     print("shortcuts: " + ", ".join(f"{k}" for k in color.CONFIG_ALIASES))
+
+
+def install_skill(target: str) -> int:
+    from importlib.resources import files
+
+    text = files("conva").joinpath("skill/SKILL.md").read_text(encoding="utf-8")
+    homes = {
+        "claude": os.environ.get("CLAUDE_CONFIG_DIR") or os.path.expanduser("~/.claude"),
+        "codex": os.environ.get("CODEX_HOME") or os.path.expanduser("~/.codex"),
+    }
+    for name in (["claude", "codex"] if target == "all" else [target]):
+        path = os.path.join(homes[name], "skills", "conva", "SKILL.md")
+        existed = os.path.exists(path)
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "w", encoding="utf-8", newline="\n") as f:
+            f.write(text)
+        print(f"{'updated' if existed else 'installed'} {name} skill: {path}")
+    return 0
 
 
 # ---------------------------------------------------------------------------------------- probe
@@ -217,6 +238,8 @@ def main(argv: list[str] | None = None) -> int:
 
 
 def _run(parser: argparse.ArgumentParser, args) -> int:
+    if args.install_skill:
+        return install_skill(args.install_skill)
     listing = args.colorspaces is not None or args.displays or args.looks or args.formats or args.configs
     if args.formats:
         list_formats()

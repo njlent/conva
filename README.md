@@ -15,6 +15,19 @@ uv tool install git+https://github.com/njlent/conva      # or, from a checkout: 
 
 To work on it: `uv sync`, then `uv run conva ...` and `uv run pytest`.
 
+## Agent skill (Claude Code / Codex)
+
+conva ships with a skill that teaches coding agents how to use it: which color space to pick, sequence
+syntax, and non-interactive flags. Install it with:
+
+```
+conva -install_skill            # both; or: -install_skill claude / -install_skill codex
+```
+
+This writes `~/.claude/skills/conva/SKILL.md` and `~/.codex/skills/conva/SKILL.md`, respecting
+`$CLAUDE_CONFIG_DIR` and `$CODEX_HOME`. Run it again after updating conva to refresh the skill.
+The source is [src/conva/skill/SKILL.md](src/conva/skill/SKILL.md).
+
 ## Examples
 
 ```bash

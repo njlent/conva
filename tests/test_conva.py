@@ -218,3 +218,12 @@ def test_size_parsing():
     assert convert.parse_size("50%", 100, 50) == (50, 25)
     assert convert.parse_size("-1x10", 100, 50) == (20, 10)
     assert convert.parse_size("0.5", 100, 50) == (50, 25)
+
+
+def test_install_skill(tmp_path, monkeypatch):
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path / "claude"))
+    monkeypatch.setenv("CODEX_HOME", str(tmp_path / "codex"))
+    assert run("-install_skill") == 0
+    for home in ("claude", "codex"):
+        text = (tmp_path / home / "skills" / "conva" / "SKILL.md").read_text(encoding="utf-8")
+        assert text.startswith("---\nname: conva\n")
