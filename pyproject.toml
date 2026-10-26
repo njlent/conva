@@ -4,7 +4,7 @@ version = "0.1.0"
 description = "ffmpeg-style image and image sequence converter with OCIO/ACES color management"
 readme = "README.md"
 authors = [
-    { name = "noeljustin", email = "n.lent@gmx.de" }
+    { name = "noeljustin", email = "noel@mimikry.ai" }
 ]
 requires-python = ">=3.12"
 dependencies = [
