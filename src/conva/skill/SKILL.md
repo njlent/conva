@@ -30,8 +30,8 @@ the format.
 ```bash
 conva -i render.exr -ics acescg -ocs srgb_tx render.png                       # color space -> color space
 conva -i plate.####.exr -ics acescg -display srgb -view "sdr 100" out/plate.####.jpg   # ACES output transform
-conva -i A001.%06d.dpx -ics "ARRI LogC4" -ocs acescg -c dwaa:45 out/A001.%06d.exr
-conva -i "tex/*.png" -ics srgb_tx -ocs acescg -f exr -d half tex_acescg/      # batch; quote the glob
+conva -i A001.%06d.dpx -ics "ARRI LogC4" -ocs acescg out/A001.%06d.exr        # float + DWAB by default
+conva -i "tex/*.png" -ics srgb_tx -ocs acescg -f exr -c zip tex_acescg/       # batch, lossless; quote the glob
 conva -i graded.jpg -idisplay srgb -ocs acescg graded.exr                     # invert an output transform
 conva -i IMG_0001.CR3 -ocs srgb_tx -s 2048x-1 -q 85 IMG_0001.webp             # camera raw -> web proxy
 conva -config aces1.3 -i in.exr -ics acescg -display srgb out.png             # ACES 1.3 instead of 2.1
@@ -71,14 +71,33 @@ conva -config aces1.3 -i in.exr -ics acescg -display srgb out.png             # 
 
 | flag | meaning |
 |---|---|
-| `-d 8\|10\|12\|16\|half\|float` | bit depth. Defaults: exr half (float stays float), tiff matches the source, dpx 10, web formats 8 |
+| `-d 8\|10\|12\|16\|half\|float\|auto` | bit depth. `auto` picks from the source: tiff matches it, dpx 10, web formats 8 |
 | `-q 1-100` | quality for jpg, webp, jxl, avif, heic |
-| `-c` | compression: exr `zip` `piz` `dwaa:45` `dwab` `b44` `none`; tiff `lzw` `zip` |
+| `-c` | compression: exr `dwab` `dwab:45` `dwaa` `zip` `zips` `piz` `pxr24` `b44` `b44a` `rle` `none`; tiff `lzw` `zip` |
 | `-s` | resize `1920x1080`, `1920x-1`, `50%`, `0.5`; `-filter lanczos3` etc. |
 | `-an` | drop alpha (jpg/hdr/ppm drop it automatically, over black) |
 | `-layer NAME` | read `NAME.R/G/B/A` from a multi-layer EXR (otherwise only the main RGBA is read) |
 | `-attrib K=V` | set output metadata |
 | `-look L` | apply OCIO looks |
+
+## Encoding defaults
+
+- **EXR defaults to full float (`-d float`) with DWAB compression (`-c dwab`).** Don't pass `-c` or `-d`
+  for EXR unless the user asks for something else. The `Output:` line shows what will be written,
+  e.g. `(openexr, float, dwab)`.
+- DWAB is lossy (DCT, default level 45). The channels are stored as 32-bit float, but the precision
+  is about that of DWAB on half; files are roughly 4.5x smaller than zip. If the user needs lossless
+  EXRs (data passes, depth, IDs, archival masters), use `-c zip` or `-c piz`.
+- Unknown EXR compression names are rejected (OpenImageIO would otherwise fall back to zip without
+  saying so). Only zip/zips/dwaa/dwab take a level.
+- Check the current defaults with `conva -defaults`. User defaults live in
+  `~/.config/conva/defaults.toml` (or `$CONVA_DEFAULTS`) and win over the built-in ones.
+  Flags on the command line win over both.
+- If the user asks to change a default for future conversions, persist it instead of repeating
+  flags: `conva -set_default exr.compression=piz`, `conva -set_default exr.depth=half`,
+  `conva -set_default jpg.quality=92`. Undo with `conva -unset_default exr.compression`.
+  Settings are `compression`, `depth` (including `auto`) and `quality`, keyed by extension
+  (`exr`, `tif`, `jpg`, `png`, `webp`, ...).
 
 ## Running non-interactively
 

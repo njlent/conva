@@ -299,7 +299,24 @@ class WriteOptions:
     attribs: list[tuple[str, str]] = field(default_factory=list)
 
 
+EXR_COMPRESSIONS = ("none", "rle", "zips", "zip", "piz", "pxr24", "b44", "b44a", "dwaa", "dwab")
+_LEVELED = ("zip", "zips", "dwaa", "dwab")
+
+
+def check_compression(fmt: str, comp: str) -> str:
+    """Validate a compression for EXR, where OIIO silently falls back to zip on unknown names."""
+    if fmt != "openexr":
+        return comp
+    name, sep, level = comp.lower().partition(":")
+    if name not in EXR_COMPRESSIONS:
+        raise ImageError(f"unknown EXR compression '{comp}' (use one of: {', '.join(EXR_COMPRESSIONS)})")
+    if sep and (name not in _LEVELED or not level.isdigit()):
+        raise ImageError(f"invalid EXR compression '{comp}': only {'/'.join(_LEVELED)} take a level, e.g. dwab:45")
+    return name + (f":{level}" if sep else "")
+
+
 def default_depth(fmt: str, src_depth: str) -> str:
+    """Bit depth chosen from the source when no -d or configured default applies ("auto")."""
     float_src = src_depth in ("half", "float", "double")
     hi_src = src_depth in ("uint16", "int16", "uint32", "int32") or float_src
     if fmt == "openexr":

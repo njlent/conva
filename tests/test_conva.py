@@ -5,7 +5,7 @@ import OpenImageIO as oiio
 import PyOpenColorIO as ocio
 import pytest
 
-from conva import cli, color, convert, sequence
+from conva import cli, color, convert, defaults, sequence
 
 
 def write_exr(path, px, dtype=oiio.HALF):
@@ -17,6 +17,14 @@ def write_exr(path, px, dtype=oiio.HALF):
 
 def read(path):
     return oiio.ImageBuf(str(path)).get_pixels(oiio.FLOAT)
+
+
+@pytest.fixture(autouse=True)
+def isolated_defaults(tmp_path, monkeypatch):
+    """Keep tests away from the real ~/.config/conva/defaults.toml."""
+    path = tmp_path / "defaults.toml"
+    monkeypatch.setenv("CONVA_DEFAULTS", str(path))
+    return path
 
 
 @pytest.fixture
@@ -227,3 +235,52 @@ def test_install_skill(tmp_path, monkeypatch):
     for home in ("claude", "codex"):
         text = (tmp_path / home / "skills" / "conva" / "SKILL.md").read_text(encoding="utf-8")
         assert text.startswith("---\nname: conva\n")
+
+
+# ---------------------------------------------------------------- encoding defaults
+
+def exr_info(path):
+    spec = oiio.ImageBuf(str(path)).spec()
+    return str(spec.format), spec.get_string_attribute("compression")
+
+
+def test_exr_default_is_float_dwab(tmp_path):
+    write_exr(tmp_path / "a.exr", np.full((32, 32, 3), 0.18, np.float32))
+    assert run("-v", "error", "-i", tmp_path / "a.exr", "-ics", "acescg", "-ocs", "aces2065_1", tmp_path / "b.exr") == 0
+    assert exr_info(tmp_path / "b.exr") == ("float", "dwab")
+
+
+def test_flags_override_defaults(tmp_path):
+    write_exr(tmp_path / "a.exr", np.full((32, 32, 3), 0.18, np.float32))
+    assert run("-v", "error", "-i", tmp_path / "a.exr", "-ics", "acescg", "-c", "piz", "-d", "half", tmp_path / "b.exr") == 0
+    assert exr_info(tmp_path / "b.exr") == ("half", "piz")
+
+
+def test_user_defaults_persist_and_apply(tmp_path, isolated_defaults):
+    assert run("-v", "error", "-set_default", "exr.compression=zip", "-set_default", "exr.depth=half") == 0
+    assert isolated_defaults.is_file()
+    assert defaults.effective("openexr") == {"compression": "zip", "depth": "half"}
+    write_exr(tmp_path / "a.exr", np.full((32, 32, 3), 0.18, np.float32))
+    assert run("-v", "error", "-i", tmp_path / "a.exr", "-ics", "acescg", tmp_path / "b.exr") == 0
+    assert exr_info(tmp_path / "b.exr") == ("half", "zip")
+    assert run("-v", "error", "-unset_default", "exr.compression", "-unset_default", "exr.depth") == 0
+    assert defaults.effective("openexr") == {"compression": "dwab", "depth": "float"}
+
+
+def test_auto_depth_follows_source(tmp_path):
+    write_exr(tmp_path / "a.exr", np.full((32, 32, 3), 0.18, np.float32))  # half source
+    assert run("-v", "error", "-i", tmp_path / "a.exr", "-ics", "acescg", "-d", "auto", tmp_path / "b.exr") == 0
+    assert exr_info(tmp_path / "b.exr")[0] == "half"
+
+
+@pytest.mark.parametrize("bad", ["htj2k", "bogus", "piz:3", "dwab:x"])
+def test_invalid_exr_compression(tmp_path, bad):
+    write_exr(tmp_path / "a.exr", np.full((32, 32, 3), 0.18, np.float32))
+    assert run("-v", "quiet", "-i", tmp_path / "a.exr", "-ics", "acescg", "-c", bad, tmp_path / "b.exr") == 1
+    assert run("-v", "quiet", "-set_default", f"exr.compression={bad}") == 1
+
+
+def test_invalid_default_settings():
+    assert run("-v", "quiet", "-set_default", "exr.speed=1") == 1
+    assert run("-v", "quiet", "-set_default", "jpg.quality=500") == 1
+    assert run("-v", "quiet", "-set_default", "nope.depth=16") == 1

@@ -38,10 +38,10 @@ conva -i render.exr -ics acescg -ocs srgb_tx render.png
 conva -i plate.####.exr -ics acescg -display srgb -view "sdr 100" -q 92 jpg/plate.####.jpg
 
 # Camera log -> ACEScg, a frame range, renumbered from 1
-conva -i A001.%06d.dpx -ics "ARRI LogC4" -ocs acescg -frames 86400-86500 -renumber 1 -c dwaa:45 out.%04d.exr
+conva -i A001.%06d.dpx -ics "ARRI LogC4" -ocs acescg -frames 86400-86500 -renumber 1 out.%04d.exr
 
-# Batch: every PNG in a folder -> half-float ACEScg EXRs (quote the glob)
-conva -i "textures/*.png" -ics srgb_tx -ocs acescg -f exr -d half textures_acescg/
+# Batch: every PNG in a folder -> lossless half-float ACEScg EXRs (quote the glob)
+conva -i "textures/*.png" -ics srgb_tx -ocs acescg -f exr -d half -c zip textures_acescg/
 
 # Display-referred image back to scene-linear (inverse output transform)
 conva -i graded.jpg -idisplay srgb -ocs acescg graded.exr
@@ -58,6 +58,7 @@ conva -colorspaces sony
 conva -displays
 conva -formats
 conva -configs
+conva -defaults
 ```
 
 ## Options
@@ -74,9 +75,9 @@ conva -configs
 | `-frames R` | `1001-1100`, `1001-1100x2`, `1,5,10-20`. Without it, every frame on disk is converted |
 | `-renumber N` | output frames start at N (gaps kept) |
 | `-f EXT` | output format, for directory outputs (otherwise the extension decides) |
-| `-d DEPTH` | `8` `10` `12` `16` `half` `float` |
+| `-d DEPTH` | `8` `10` `12` `16` `half` `float`, or `auto` (picked from the source) |
 | `-q Q` | quality 1-100 for jpg, webp, jxl, avif, heic |
-| `-c C` | compression: `zip` `piz` `dwaa:45` `dwab` `b44` `none` (exr), `lzw` `zip` (tiff), ... |
+| `-c C` | compression: `dwab` `dwab:45` `dwaa` `zip` `zips` `piz` `pxr24` `b44` `b44a` `rle` `none` (exr), `lzw` `zip` (tiff), ... |
 | `-s SIZE` | resize: `1920x1080`, `1920x-1` (keep aspect), `50%`, `0.5`. `-filter` picks the filter |
 | `-an` | drop alpha |
 | `-layer NAME` | read `NAME.R/G/B/A` from a multi-layer EXR |
@@ -87,8 +88,39 @@ conva -configs
 | `-j N` | frames processed in parallel (default `min(8, cores)`) |
 | `-v LEVEL` | `quiet` `error` `warning` `info` `verbose` |
 | `-dry_run` | print the file mapping only |
+| `-defaults` | show per-format encoding defaults |
+| `-set_default FMT.KEY=V` | persist a default (repeatable): `exr.compression=piz`, `exr.depth=half`, `jpg.quality=92` |
+| `-unset_default FMT.KEY` | remove a persisted default |
 
 Sequence tokens: `####` (one `#` per digit), `%04d`, `@@@@` and `$F4`.
+
+## Encoding defaults
+
+EXR is written as **32-bit float with DWAB compression** unless `-d` or `-c` say otherwise.
+
+DWAB is lossy (DCT, default level 45). The channels are stored as float, but the precision is about
+that of DWAB on half. Files come out roughly 4.5x smaller than zip. For lossless output (data passes,
+archival masters), pass `-c zip` or `-c piz`, or make that the default.
+
+Defaults can be changed per format and are stored in `~/.config/conva/defaults.toml`
+(`$CONVA_DEFAULTS` overrides the path):
+
+```bash
+conva -defaults                                   # show what applies and where it comes from
+conva -set_default exr.compression=piz -set_default exr.depth=half
+conva -set_default jpg.quality=92
+conva -unset_default exr.compression              # back to the built-in dwab
+```
+
+```toml
+# ~/.config/conva/defaults.toml
+[exr]
+compression = "piz"
+depth = "half"
+```
+
+Command line flags win over user defaults, which win over the built-in ones. Unknown EXR compression
+names are rejected; OpenImageIO would otherwise fall back to zip without saying so.
 
 ## Formats
 
@@ -106,8 +138,9 @@ Run `conva -formats` for the full list. The main ones:
 - **Camera raw** files are decoded with camera white balance to linear ACES2065-1, and `-ics` is ignored for them.
 - **Alpha**: colors are unpremultiplied before the transform and premultiplied again after it. Formats
   without alpha (jpg, hdr, ppm) get the image composited over black.
-- **Default bit depth**: exr is half (float stays float), tiff matches the source, dpx is 10-bit, png is
-  16-bit when the source is 16-bit int and 8-bit otherwise. Web formats are 8-bit.
+- **Default bit depth**: exr is float (see above). For other formats, or with `-d auto`, the depth comes
+  from the source: tiff matches it, dpx is 10-bit, png is 16-bit when the source is 16-bit int and
+  8-bit otherwise, and web formats are 8-bit. `auto` on exr gives half, or float for a float source.
 - Output files get `oiio:ColorSpace` metadata. Most other metadata is copied over. ICC profiles are not
   embedded, so a P3 or Rec.2020 PNG/JPEG shows as untagged (sRGB) in browsers.
 - The OCIO transform runs in row chunks across all cores. One 4K frame through the ACES 2.0 output

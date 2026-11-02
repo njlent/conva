@@ -8,7 +8,7 @@ import sys
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
-from . import __version__, color, convert, images, sequence
+from . import __version__, color, convert, defaults, images, sequence
 
 LEVELS = {"quiet": 0, "error": 1, "warning": 2, "info": 3, "verbose": 4}
 _level = LEVELS["info"]
@@ -31,8 +31,11 @@ examples:
   conva -i in.exr                                              (show file info)
   conva -colorspaces sony | conva -displays | conva -formats | conva -configs
   conva -install_skill                                         (agent skill for Claude Code + Codex)
+  conva -defaults | conva -set_default exr.compression=piz      (show / change encoding defaults)
 
 sequences: patterns ####, %04d, @@@@ and $F4 are supported for input and output.
+defaults:  exr is written as float with DWAB compression unless -d/-c say otherwise.
+           Change per-format defaults with -set_default (stored in ~/.config/conva/defaults.toml).
 config:    default is $OCIO if set, else the built-in ACES studio config (ACES 2.1).
            -config accepts a path, an ocio:// URI, a built-in name or: aces2.1, aces2.0, aces1.3, cg.
 """
@@ -70,9 +73,9 @@ def build_parser() -> argparse.ArgumentParser:
     g.add_argument("-no_unpremult", action="store_true", help="don't unpremultiply alpha around the color transform")
 
     g = p.add_argument_group("encoding")
-    g.add_argument("-d", "-depth", dest="depth", metavar="DEPTH", help="bit depth: 8, 10, 12, 16, half, float")
+    g.add_argument("-d", "-depth", dest="depth", metavar="DEPTH", help="bit depth: 8, 10, 12, 16, half, float, auto (from source)")
     g.add_argument("-q", "-quality", dest="quality", type=int, metavar="Q", help="quality 1-100 (jpg, webp, avif, heic, jxl)")
-    g.add_argument("-c", "-compression", dest="compression", metavar="C", help="compression, e.g. zip, piz, dwaa:45, lzw, none")
+    g.add_argument("-c", "-compression", dest="compression", metavar="C", help="compression, e.g. dwab, dwab:45, zip, piz, lzw, none (exr default: dwab)")
     g.add_argument("-dither", action="store_true", help="dither when writing 8-bit")
     g.add_argument("-attrib", action="append", default=[], metavar="K=V", help="set an output metadata attribute (repeatable)")
     g.add_argument("-an", "-noalpha", dest="drop_alpha", action="store_true", help="drop the alpha channel")
@@ -95,6 +98,11 @@ def build_parser() -> argparse.ArgumentParser:
     g.add_argument("-looks", action="store_true", help="list looks")
     g.add_argument("-formats", action="store_true", help="list supported file formats")
     g.add_argument("-configs", action="store_true", help="list built-in OCIO configs")
+    g.add_argument("-defaults", action="store_true", help="show per-format encoding defaults")
+    g.add_argument("-set_default", action="append", default=[], metavar="FMT.KEY=V",
+                   help="persist a default, e.g. exr.compression=dwab, exr.depth=float, jpg.quality=92")
+    g.add_argument("-unset_default", action="append", default=[], metavar="FMT.KEY",
+                   help="remove a persisted default, e.g. exr.compression")
     g.add_argument("-install_skill", nargs="?", const="all", choices=["claude", "codex", "all"],
                    help="install the conva agent skill for Claude Code and/or Codex (default: all)")
     return p
@@ -240,7 +248,15 @@ def main(argv: list[str] | None = None) -> int:
 def _run(parser: argparse.ArgumentParser, args) -> int:
     if args.install_skill:
         return install_skill(args.install_skill)
-    listing = args.colorspaces is not None or args.displays or args.looks or args.formats or args.configs
+    if args.set_default:
+        log("info", f"saved defaults to {defaults.set_values(args.set_default)}")
+    if args.unset_default:
+        log("info", f"saved defaults to {defaults.unset_values(args.unset_default)}")
+    if args.defaults or args.set_default or args.unset_default:
+        print(f"encoding defaults ({defaults.defaults_path()}):")
+        print("\n".join(defaults.describe()) or "  none")
+    listing = (args.colorspaces is not None or args.displays or args.looks or args.formats or args.configs
+               or args.defaults or args.set_default or args.unset_default)
     if args.formats:
         list_formats()
     if args.configs:
@@ -267,8 +283,6 @@ def _run(parser: argparse.ArgumentParser, args) -> int:
 
     if args.y and args.n:
         raise ValueError("-y and -n are mutually exclusive")
-    if args.depth and args.depth.lower() not in images.DEPTHS:
-        raise ValueError(f"unknown bit depth '{args.depth}' (use one of: 8, 10, 12, 16, half, float)")
 
     pl = convert.plan(args.input, args.output, frames=args.frames, renumber=args.renumber, out_ext=args.format)
     fmt = images.format_for(pl.jobs[0].dst, args.format)
@@ -276,6 +290,14 @@ def _run(parser: argparse.ArgumentParser, args) -> int:
         raise ValueError("camera raw formats can only be read")
     if not fmt.startswith("pil:") and not images.oiio_can_write(fmt):
         raise ValueError(f"format '{fmt}' can only be read (see conva -formats)")
+
+    # -d/-c/-q win over configured defaults, which win over source-based "auto" depth
+    fmt_defaults = defaults.effective(fmt)
+    depth = defaults.validate(fmt, "depth", args.depth) if args.depth else fmt_defaults.get("depth", "auto")
+    compression = args.compression or fmt_defaults.get("compression")
+    if compression:
+        compression = images.check_compression(fmt, compression)
+    quality = args.quality if args.quality is not None else fmt_defaults.get("quality")
 
     attribs = []
     for kv in args.attrib:
@@ -294,9 +316,9 @@ def _run(parser: argparse.ArgumentParser, args) -> int:
         inv_view=args.iview,
         write=images.WriteOptions(
             fmt=fmt,
-            depth=args.depth.lower() if args.depth else None,
-            quality=args.quality,
-            compression=args.compression,
+            depth=None if depth == "auto" else depth,
+            quality=quality,
+            compression=compression,
             dither=args.dither,
             attribs=attribs,
         ),
@@ -317,12 +339,12 @@ def _run(parser: argparse.ArgumentParser, args) -> int:
     elif not args.ics and not (args.idisplay or args.iview) and images.format_for(first_src) != "raw":
         log("warning", f"no -ics given, using the config's file rule guess: '{in_cs}'")
 
-    depth = args.depth or ("8" if fmt.startswith("pil:") else "auto depth")
+    shown_depth = "8" if fmt.startswith("pil:") else (f"{depth} depth" if depth == "auto" else depth)
     log("info", f"Input:  {pl.input_label}" + (f"  [{sequence.summarize_frames(pl.frames)}]" if pl.frames else ""))
     log("info", f"Color:  {pipe.description}   ({cfg.getName()})")
     log("info", f"Output: {pl.output_label}  ({fmt.removeprefix('pil:').lower()}"
-        + (f", {depth}" if depth else "") + (f", q={args.quality}" if args.quality else "")
-        + (f", {args.compression}" if args.compression else "") + ")")
+        + f", {shown_depth}" + (f", q={quality}" if quality else "")
+        + (f", {compression}" if compression else "") + ")")
     for f in pl.missing:
         log("warning", f"frame {f} is missing, skipping")
 
